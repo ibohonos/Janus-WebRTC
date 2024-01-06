@@ -1,0 +1,26 @@
+{
+    "name": "vue",
+    "version": "1.0.0",
+    "scripts": {
+        "dev": "mode=dev vite",
+        "qa": "mode=qa vite",
+        "prod": "mode=prod vite",
+        "build": "vite build -m development",
+        "preview": "vite preview --port 4173",
+        "start": "node vueBaseAppServer.js"
+    },
+    "dependencies": {
+        "compression": "^1.7.4",
+        "dotenv": "^16.3.1",
+        "express": "^4.18.2",
+        "yargs": "^17.7.2",
+        "janus-gateway": "^1.2.1"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^4.4.0",
+        "vite": "^4.5.0",
+        "vue": "^3.3.7"
+    },
+    "author": "Ivan Bohonosiuk",
+    "license": "ISC"
+}
