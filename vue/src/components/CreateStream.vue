@@ -14,13 +14,14 @@
   let localStream = ref(null)
   let localScreenShare = ref(null)
   let roomId = ref(1234)
+  let error = ref(null)
   let isStreaming = ref(false)
   let streamVideos = ref({})
   let shareTrack = ref(null)
 
   async function startStreaming() {
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
 
       janus.value = new Janus({
         server: JANUS_URL,
@@ -66,6 +67,7 @@
       })
     } catch (error) {
       onError('Error accessing screen:', error)
+      log('Error accessing screen:', error)
     }
   }
 
@@ -298,6 +300,11 @@
     }
   }
 
+  function onError(message, e='') {
+    Janus.error(message, e)
+    error.value = message + " - " + e
+  }
+
   function joinToShare(stream) {
     log("sharePlugin Joined room! Creating offer...");
 
@@ -331,6 +338,8 @@
       },
       error: (error) => {
         onError("sharePlugin createOffer error", error)
+        localScreenShare.value = null
+        stopShare()
       }
     })
   }
@@ -385,6 +394,7 @@
     <button @click="stopStreaming" v-else>Stop Streaming</button>
     <button @click="startShare" v-if="isStreaming && localScreenShare == null">Start Share</button>
     <button @click="stopShare" v-if="isStreaming && localScreenShare != null">Stop Share</button>
+    <div v-if="error">{{ error }}</div>
     <div>
       <video v-for="(video, index) in streamVideos" :id="index" :srcObject="video" width="100%" autoplay muted playsinline />
     </div>

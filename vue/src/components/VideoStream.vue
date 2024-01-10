@@ -399,11 +399,11 @@
     <div v-if="status">Status: {{ status }}</div>
     <button @click="start" v-if="!isConnected">Connect</button>
     <button @click="stop" v-else>Disconnect</button>
+    <div v-if="error">{{ error }}</div>
     <div>
       <!-- <video ref="stream" autoplay playsinline /> -->
       <video v-for="(video, index) in streamVideos" :id="index" :srcObject="video" width="100%" autoplay playsinline />
       <audio ref="audio" hidden autoplay playsinline />
     </div>
-    <div v-if="error">{{ error }}</div>
   </div>
 </template>
