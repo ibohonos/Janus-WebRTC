@@ -1,0 +1,11 @@
+{
+  "general": {
+    "enabled": true,
+    "token_type": "Bearer",
+    "auth_server": "https://authorization-server.com/authorize",
+    "client_id": "l2Aha-2np1F9wNh47f5qmEMp",
+    "client_secret": "GZaHM1hIR9b4EosRSPcYdvVcA-tkQd2IBdmo19eL7IJdnXsy",
+    "scope": "photo+offline_access",
+    "redirect_uri": "https://www.oauth.com/playground/authorization-code.html"
+  }
+}

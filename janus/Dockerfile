@@ -56,7 +56,7 @@ RUN cd /tmp && \
 RUN cd /tmp && \
     git clone https://github.com/meetecho/janus-gateway && \
     cd janus-gateway && \
-    git checkout tags/v1.2.1 -b v1.2.1 && \
+    git checkout tags/v1.2.2 -b v1.2.2 && \
     /tmp/janus-gateway/autogen.sh && \
     /tmp/janus-gateway/configure --enable-post-processing --prefix=/usr/local && \
     make && \
@@ -68,7 +68,7 @@ FROM debian:bullseye-slim
 ARG BUILD_DATE="undefined"
 ARG GIT_BRANCH="undefined"
 ARG GIT_COMMIT="undefined"
-ARG VERSION="undefined"
+ARG VERSION="1.2.2"
 
 LABEL build_date=${BUILD_DATE}
 LABEL git_branch=${GIT_BRANCH}

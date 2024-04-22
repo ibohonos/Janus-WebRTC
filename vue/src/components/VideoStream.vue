@@ -6,6 +6,7 @@
 
   // const JANUS_URL = 'http://localhost:8088/janus'
   const JANUS_URL = ['ws://localhost:8188', 'http://localhost:8088/janus']
+  const JANUS_ADMIN = "http://localhost:7088/admin"
 
   let janus = ref(null)
   let plugin = ref(null)
@@ -21,9 +22,10 @@
   let mypvtid = ref(null)
   let isConnected = ref(false)
 
-  function connect(server) {
+  function connect(server, token = "") {
     janus.value = new Janus({
       server,
+      token: token,
       success: () => {
         attachPlugin()
         status.value = "connected"
@@ -37,6 +39,52 @@
         window.location.reload()
       }
     })
+  }
+
+  async function saveToken() {
+    try {
+      let data = {
+        "janus" : "add_token",
+        "token": "testToken1",
+        "transaction" : Janus.randomString(12),
+        "plugins": [
+                "janus.plugin.streaming",
+                "janus.plugin.videoroom"
+        ],
+        "admin_secret": "janusoverlord"
+      }
+      let response = await fetch(JANUS_ADMIN, {
+        method: "POST",
+        body: JSON.stringify(data)
+      })
+
+      let resp = response.json()
+
+      console.log("saveToken response ", resp)
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
+  }
+
+  async function removeToken() {
+    try {
+      let data = {
+        "janus" : "remove_token",
+        "token": "testToken1",
+        "transaction" : Janus.randomString(12),
+        "admin_secret": "janusoverlord"
+      }
+      let response = await fetch(JANUS_ADMIN, {
+        method: "POST",
+        body: JSON.stringify(data)
+      })
+
+      let resp = response.json()
+
+      console.log("removeToken response ", resp)
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
   }
 
   function attachPlugin() {
@@ -336,6 +384,10 @@
     connect(JANUS_URL)
   }
 
+  function startWithToken() {
+    connect(JANUS_URL, "testToken1")
+  }
+
   function stop() {
     plugin.value.send({ 
       message: { request: "leave" },
@@ -397,8 +449,12 @@
 <template>
   <div>
     <div v-if="status">Status: {{ status }}</div>
+    <button @click="saveToken" v-if="!isConnected">Save token</button>
+    <button @click="removeToken" v-if="!isConnected">Delete token</button>
+    <br v-if="!isConnected" />
     <button @click="start" v-if="!isConnected">Connect</button>
     <button @click="stop" v-else>Disconnect</button>
+    <button @click="startWithToken" v-if="!isConnected">Connect with token</button>
     <div v-if="error">{{ error }}</div>
     <div>
       <!-- <video ref="stream" autoplay playsinline /> -->

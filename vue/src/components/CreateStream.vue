@@ -6,6 +6,7 @@
 
   // const JANUS_URL = 'http://localhost:8088/janus'
   const JANUS_URL = ['ws://localhost:8188', 'http://localhost:8088/janus']
+  const JANUS_ADMIN = "http://localhost:7088/admin"
 
   let janus = ref(null)
   let janusStream = ref(null)
@@ -30,6 +31,77 @@
         },
         error: (error) => {
           console.error('Failed to connect to janus server', error)
+          onError('Failed to connect to janus server', error)
+        },
+        destroyed: () => {
+          window.location.reload()
+          log("destroyed")
+        }
+      })
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
+  }
+
+  async function saveToken() {
+    try {
+      let data = {
+        "janus" : "add_token",
+        "token": "testToken",
+        "transaction" : Janus.randomString(12),
+        "plugins": [
+                "janus.plugin.streaming",
+                "janus.plugin.videoroom"
+        ],
+        "admin_secret": "janusoverlord"
+      }
+      let response = await fetch(JANUS_ADMIN, {
+        method: "POST",
+        body: JSON.stringify(data)
+      })
+
+      let resp = response.json()
+
+      console.log("saveToken response ", resp)
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
+  }
+
+  async function removeToken() {
+    try {
+      let data = {
+        "janus" : "remove_token",
+        "token": "testToken",
+        "transaction" : Janus.randomString(12),
+        "admin_secret": "janusoverlord"
+      }
+      let response = await fetch(JANUS_ADMIN, {
+        method: "POST",
+        body: JSON.stringify(data)
+      })
+
+      let resp = response.json()
+
+      console.log("removeToken response ", resp)
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
+  }
+
+  async function startStreamingWithToken() {
+    try {
+      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+
+      janus.value = new Janus({
+        server: JANUS_URL,
+        token: "testToken",
+        success: () => {
+          attachStreamingPlugin(localStream.value)
+        },
+        error: (error) => {
+          console.error('Failed to connect to janus server', error)
+          onError('Failed to connect to janus server', error)
         },
         destroyed: () => {
           window.location.reload()
@@ -390,8 +462,12 @@
 
 <template>
   <div class="stream">
+    <button @click="saveToken" v-if="!isStreaming">Save token</button>
+    <button @click="removeToken" v-if="!isStreaming">Delete token</button>
+    <br v-if="!isStreaming" />
     <button @click="startStreaming" v-if="!isStreaming">Start Streaming</button>
     <button @click="stopStreaming" v-else>Stop Streaming</button>
+    <button @click="startStreamingWithToken" v-if="!isStreaming">Start Streaming with token</button>
     <button @click="startShare" v-if="isStreaming && localScreenShare == null">Start Share</button>
     <button @click="stopShare" v-if="isStreaming && localScreenShare != null">Stop Share</button>
     <div v-if="error">{{ error }}</div>

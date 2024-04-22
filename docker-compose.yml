@@ -17,6 +17,7 @@ services:
       - "./janus/etc/janus/janus.eventhandler.sampleevh.jcfg:/usr/local/etc/janus/janus.eventhandler.sampleevh.jcfg"
       - "./janus/etc/janus/janus.plugin.streaming.jcfg:/usr/local/etc/janus/janus.plugin.streaming.jcfg"
       - "./janus/etc/janus/janus.plugin.videoroom.jcfg:/usr/local/etc/janus/janus.plugin.videoroom.jcfg"
+      - "./janus/etc/janus/janus.transport.http.jcfg:/usr/local/etc/janus/janus.transport.http.jcfg"
   vue:
     build:
       context: ./vue
