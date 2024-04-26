@@ -17,8 +17,13 @@
   let roomId = ref(1234)
   let error = ref(null)
   let isStreaming = ref(false)
+  let localStreamVideos = ref({})
   let streamVideos = ref({})
+  let audio = ref({})
   let shareTrack = ref(null)
+  let myid = ref(null)
+  let mypvtid = ref(null)
+  var opaqueId = ref(Janus.randomString(12))
 
   async function startStreaming() {
     try {
@@ -147,7 +152,7 @@
     if (shareTrack.value) {
       log("stopShare", shareTrack.value)
       shareTrack.value.stop()
-      delete streamVideos.value[shareTrack.value["id"]]
+      delete localStreamVideos.value[shareTrack.value["id"]]
     }
 
     if (sharePlugin.value) {
@@ -165,7 +170,7 @@
   function attachStreamingPlugin(stream) {
     janus.value.attach({
       plugin: "janus.plugin.videoroom",
-      opaqueId: Janus.randomString(12),
+      opaqueId: opaqueId.value,
       success: (pluginHandle) => {
           log("Publisher plugin attached!");
           log(pluginHandle);
@@ -241,20 +246,88 @@
             log(jsep)
             plugin.value.handleRemoteJsep({ jsep: jsep })
           }
+
+          if (message.videoroom === "joined") {
+            myid.value = message["id"];
+            mypvtid.value = message["private_id"];
+            Janus.log("Successfully joined room " + message["room"] + " with ID " + message["id"]);
+
+            if (message["publishers"]) {
+              let list = message["publishers"];
+              Janus.debug("Got a list of available publishers/feeds:", list);
+              for(let f in list) {
+                if(list[f]["dummy"])
+                  continue;
+                let id = list[f]["id"];
+                let streams = list[f]["streams"];
+                let display = list[f]["display"];
+                for(let i in streams) {
+                  let stream = streams[i];
+                  stream["id"] = id;
+                  stream["display"] = display;
+                }
+                log("  >> [" + id + "] " + display + ":", streams);
+                newRemoteFeed(id, display, streams);
+              }
+            }
+          }
+
+          if (message.videoroom === "event") {
+            log("videoroom === event")
+
+            if (message["publishers"]) {
+              let list = message["publishers"];
+              log("Got a list of available publishers/feeds:", list);
+              for(let f in list) {
+                if(list[f]["dummy"])
+                  continue;
+
+                let id = list[f]["id"];
+                let streams = list[f]["streams"];
+                let display = list[f]["display"];
+
+                for(let i in streams) {
+                  let stream = streams[i];
+
+                  stream["id"] = id;
+                  stream["display"] = display;
+                }
+                log("  >> [" + id + "] " + display + ":", streams);
+                newRemoteFeed(id, display, streams);
+              }
+            }
+          }
         },
         onlocaltrack: (track, on) => {
           log("Successfully published local track: ", on, track);
           if(!on) {
             if(track.kind === "video") {
-              delete streamVideos.value[track["id"]]
+              delete localStreamVideos.value[track["id"]]
               
-              isStreaming.value = Object.keys(streamVideos.value).length > 0
+              isStreaming.value = Object.keys(localStreamVideos.value).length > 0
             }
 
             return
           }
 
           onLocalStream(track)
+        },
+        onremotetrack: (s, mid, on, metadata) => {
+          log("onremotetrack", s, mid, on, metadata)
+
+          if (!on) {
+            if(s.kind === "video") {
+              delete streamVideos.value[s["id"]]
+            }
+
+            if (s.kind === "audio") {
+              delete audio.value[s["id"]]
+            }
+
+            return
+          }
+
+          onRemoteStream(s)
         },
         error: (err) => {
           log("Publish: Janus VideoRoom Plugin Error!", true);
@@ -274,10 +347,171 @@
     })
   }
 
+  function newRemoteFeed(id, display, streams) {
+    // A new feed has been published, create a new plugin handle and attach to it as a subscriber
+    let subscriberPlugin = null;
+
+    janus.value.attach({
+      plugin: "janus.plugin.videoroom",
+      opaqueId: opaqueId.value,
+      success: function(pluginHandle) {
+        subscriberPlugin = pluginHandle;
+        subscriberPlugin.remoteTracks = {};
+        subscriberPlugin.remoteVideos = 0;
+        subscriberPlugin.simulcastStarted = false;
+        subscriberPlugin.svcStarted = false;
+        Janus.log("Plugin attached! (" + subscriberPlugin.getPlugin() + ", id=" + subscriberPlugin.getId() + ")");
+        Janus.log("  -- This is a subscriber");
+        // Prepare the streams to subscribe to, as an array: we have the list of
+        // streams the feed is publishing, so we can choose what to pick or skip
+        let subscription = [];
+        for(let i in streams) {
+          let stream = streams[i];
+          // If the publisher is VP8/VP9 and this is an older Safari, let's avoid video
+          if(stream.type === "video" && Janus.webRTCAdapter.browserDetails.browser === "safari" &&
+              ((stream.codec === "vp9" && !Janus.safariVp9) || (stream.codec === "vp8" && !Janus.safariVp8))) {
+            log("Publisher is using " + stream.codec.toUpperCase +
+                ", but Safari doesn't support it: disabling video stream #" + stream.mindex);
+            continue;
+          }
+          subscription.push({
+            feed: stream.id,  // This is mandatory
+            mid: stream.mid   // This is optional (all streams, if missing)
+          });
+          // FIXME Right now, this is always the same feed: in the future, it won't
+          subscriberPlugin.rfid = stream.id;
+          subscriberPlugin.rfdisplay = stream.display;
+        }
+        // We wait for the plugin to send us an offer
+        let subscribe = {
+          request: "join",
+          room: roomId.value,
+          ptype: "subscriber",
+          streams: subscription,
+          use_msid: false,
+          private_id: mypvtid.value,
+          pin: "123123"
+        };
+        subscriberPlugin.send({ message: subscribe });
+      },
+      error: function(error) {
+        log("subscriber  -- Error attaching plugin...", error)
+        onError("subscriber -- Error attaching plugin...", error)
+      },
+      iceState: function(state) {
+        Janus.log("subscriber ICE state (feed #" + subscriberPlugin.rfid + ") changed to " + state);
+        // status.value = state
+      },
+      webrtcState: function(on) {
+        log("subscriber Janus says this WebRTC PeerConnection (feed #" + subscriberPlugin.rfid + ") is " + (on ? "up" : "down") + " now");
+      },
+      slowLink: function(uplink, lost, mid) {
+        log("subscriber Janus reports problems " + (uplink ? "sending" : "receiving") +
+            " packets on mid " + mid + " (" + lost + " lost packets)");
+      },
+      onmessage: function(msg, jsep) {
+        log(" ::: Got a message (subscriber) :::", msg)
+        let event = msg["videoroom"]
+        log("Event: " + event)
+        if(msg["error"]) {
+          log(msg["error"])
+        } else if(event) {
+          if(event === "attached") {
+            // Subscriber created and attached
+            log("Successfully attached to feed in room " + msg["room"]);
+          } else if(event === "event") {
+            // if (msg.error_code !== undefined && msg.error_code === 428) {
+            //   status.value = "Stream not started"
+            // }
+            // Check if we got a simulcast-related event from this publisher
+            let substream = msg["substream"];
+            let temporal = msg["temporal"];
+            if((substream !== null && substream !== undefined) || (temporal !== null && temporal !== undefined)) {
+              if(!subscriberPlugin.simulcastStarted) {
+                subscriberPlugin.simulcastStarted = true;
+              }
+            }
+            // Or maybe SVC?
+            let spatial = msg["spatial_layer"];
+            temporal = msg["temporal_layer"];
+            if((spatial !== null && spatial !== undefined) || (temporal !== null && temporal !== undefined)) {
+              if(!subscriberPlugin.svcStarted) {
+                subscriberPlugin.svcStarted = true;
+              }
+            }
+          } else {
+            // What has just happened?
+          }
+        }
+
+        if(jsep) {
+          log("Handling SDP as well...", jsep);
+          let stereo = (jsep.sdp.indexOf("stereo=1") !== -1);
+          // Answer and attach
+          subscriberPlugin.createAnswer(
+              {
+                jsep: jsep,
+                // We only specify data channels here, as this way in
+                // case they were offered we'll enable them. Since we
+                // don't mention audio or video tracks, we autoaccept them
+                // as recvonly (since we won't capture anything ourselves)
+                tracks: [
+                  { type: 'data' }
+                ],
+                customizeSdp: function(jsep) {
+                  if(stereo && jsep.sdp.indexOf("stereo=1") == -1) {
+                    // Make sure that our offer contains stereo too
+                    jsep.sdp = jsep.sdp.replace("useinbandfec=1", "useinbandfec=1;stereo=1");
+                  }
+                },
+                success: function(jsep) {
+                  log("Got SDP!", jsep);
+                  let body = { request: "start", room: roomId.value };
+                  subscriberPlugin.send({ message: body, jsep: jsep });
+                },
+                error: function(error) {
+                  onError("WebRTC error: ", error);
+                }
+              });
+        }
+      },
+      // eslint-disable-next-line no-unused-vars
+      onlocaltrack: function(track, on) {
+        // The subscriber stream is recvonly, we don't expect anything here
+        log("subscriber onlocaltrack", track, on)
+      },
+      onremotetrack: function(track, mid, on, metadata) {
+        log(
+            "Remote feed #" + subscriberPlugin.rfid +
+            ", remote track (mid=" + mid + ") " +
+            (on ? "added" : "removed") +
+            (metadata? " (" + metadata.reason + ") ": "") + ":", track
+        );
+        if (!on) {
+          if (track.kind === "video") {
+            delete streamVideos.value[track["id"]]
+          }
+
+          if (track.kind === "audio") {
+            delete audio.value[track["id"]]
+          }
+
+          return
+        }
+
+        onRemoteStream(track)
+      },
+      oncleanup: function() {
+        // log(" ::: Got a cleanup notification (remote feed " + id + ") :::");
+        onCleanup()
+      }
+    })
+  }
+
   function attachSharePlugin(stream) {
     janusStream.value.attach({
       plugin: "janus.plugin.videoroom",
-      opaqueId: Janus.randomString(12),
+      opaqueId: opaqueId.value,
       success: (pluginHandle) => {
           log("sharePlugin Publisher plugin attached!");
           log(pluginHandle);
@@ -328,7 +562,7 @@
           log("sharePlugin Successfully published local track: ", on, track);
           if(!on) {
             if(track.kind === "video") {
-              delete streamVideos.value[track["id"]]
+              delete localStreamVideos.value[track["id"]]
               track.stop()
               stopShare()
             }
@@ -429,10 +663,28 @@
       // New video track: create a stream out of it
       let videoStream = new MediaStream([track]);
       log("Created local video stream:", videoStream);
-      streamVideos.value[track["id"]] = videoStream
+      localStreamVideos.value[track["id"]] = videoStream
     }
 
     isStreaming.value = true
+  }
+
+  function onRemoteStream(track) {
+    log("onRemoteStream", track)
+
+    if (track.kind === "audio") {
+      // New audio track: create a stream out of it, and use a hidden <audio> element
+      let audioStream = new MediaStream([track]);
+      log("Created remote audio stream:", audioStream);
+      // Janus.attachMediaStream(audio.value, stream);
+      audio.value[track["id"]] = audioStream
+    } else {
+      // New video track: create a stream out of it
+      let videoStream = new MediaStream([track]);
+      log("Created remote video stream:", videoStream);
+      // Janus.attachMediaStream(streamVideos.value[track["id"]], videoStream);
+      streamVideos.value[track["id"]] = videoStream
+    }
   }
 
   function onCleanup() {
@@ -447,6 +699,7 @@
 
     isStreaming.value = false
     streamVideos.value = {}
+    localStreamVideos.value = {}
     localStream.value = null
     localScreenShare.value = null
   }
@@ -472,7 +725,13 @@
     <button @click="stopShare" v-if="isStreaming && localScreenShare != null">Stop Share</button>
     <div v-if="error">{{ error }}</div>
     <div>
-      <video v-for="(video, index) in streamVideos" :id="index" :srcObject="video" width="100%" autoplay muted playsinline />
+      <div v-for="(item, index) in localStreamVideos">
+        <video :id="index" :srcObject="item" width="100%" autoplay muted playsinline />
+      </div>
+      <div v-for="(item, index) in streamVideos">
+        <video :id="index" :srcObject="item" width="100%" autoplay muted playsinline />
+      </div>
+      <audio v-for="(item, index) in audio" :id="index" :srcObject="item" hidden autoplay playsinline />
     </div>
   </div>
 </template>

@@ -9,15 +9,16 @@
   const JANUS_ADMIN = "http://localhost:7088/admin"
 
   let janus = ref(null)
-  let plugin = ref(null)
+  let publisherPlugin = ref(null)
   var opaqueId = ref(Janus.randomString(12))
-  let stream = ref()
   let streamVideos = ref({})
-  let audio = ref()
+  let localStream = ref(null)
+  let audio = ref({})
   let error = ref(null)
   let status = ref("not connected")
   let roomId = ref(1234)
   let isViewing = ref(false)
+  let isStreaming = ref(false)
   let myid = ref(null)
   let mypvtid = ref(null)
   let isConnected = ref(false)
@@ -96,8 +97,8 @@
         log("Remote Stream Plugin attached.")
         log(pluginHandle)
 
-        plugin.value = pluginHandle;
-        plugin.value.send({
+        publisherPlugin.value = pluginHandle;
+        publisherPlugin.value.send({
           message: {
             request: "join",
             room: roomId.value,
@@ -174,7 +175,7 @@
 
         if(jsep) {
           Janus.debug("Handling SDP as well...", jsep);
-          plugin.value.handleRemoteJsep({ jsep: jsep });
+          publisherPlugin.value.handleRemoteJsep({ jsep: jsep });
         }
       },
       error: (err) => {
@@ -185,9 +186,9 @@
       webrtcState: function(on) {
         Janus.log("publisher Janus says our WebRTC PeerConnection is " + (on ? "up" : "down") + " now");
         if (!on)
-          return;
+          return
 
-        // plugin.value.send({ message: { request: "configure", bitrate: 2000000 }});
+        // publisherPlugin.value.send({ message: { request: "configure", bitrate: 2000000 }});
       },
       iceState: (state) => {
         log("publisher iceState", state)
@@ -198,14 +199,27 @@
       },
       onlocaltrack: (local, on) => {
         log("publisher onlocaltrack", local, on)
+        if(!on) {
+          if(local.kind === "video") {
+            delete streamVideos.value[local["id"]]
+
+            isStreaming.value = false
+          }
+
+          return
+        }
+
+        onLocalStream(local)
       },
       onremotetrack: (s, mid, on, metadata) => {
         log("publisher onremotetrack", s, mid, on, metadata)
 
         if (!on) {
-          if(s.kind === "video") {
-            stream.value.srcObject = null
+          if (s.kind === "video") {
+            delete streamVideos.value[s["id"]]
             isViewing.value = false
+          } else if (s.kind === "audio") {
+            delete  audio.value[s["id"]]
           }
 
           return
@@ -224,18 +238,18 @@
 
   function newRemoteFeed(id, display, streams) {
     // A new feed has been published, create a new plugin handle and attach to it as a subscriber
-    let remoteFeed = null;
+    let subscriberPlugin = null;
 
     janus.value.attach({
         plugin: "janus.plugin.videoroom",
         opaqueId: opaqueId.value,
         success: function(pluginHandle) {
-          remoteFeed = pluginHandle;
-          remoteFeed.remoteTracks = {};
-          remoteFeed.remoteVideos = 0;
-          remoteFeed.simulcastStarted = false;
-          remoteFeed.svcStarted = false;
-          Janus.log("Plugin attached! (" + remoteFeed.getPlugin() + ", id=" + remoteFeed.getId() + ")");
+          subscriberPlugin = pluginHandle;
+          subscriberPlugin.remoteTracks = {};
+          subscriberPlugin.remoteVideos = 0;
+          subscriberPlugin.simulcastStarted = false;
+          subscriberPlugin.svcStarted = false;
+          Janus.log("Plugin attached! (" + subscriberPlugin.getPlugin() + ", id=" + subscriberPlugin.getId() + ")");
           Janus.log("  -- This is a subscriber");
           // Prepare the streams to subscribe to, as an array: we have the list of
           // streams the feed is publishing, so we can choose what to pick or skip
@@ -254,8 +268,8 @@
               mid: stream.mid   // This is optional (all streams, if missing)
             });
             // FIXME Right now, this is always the same feed: in the future, it won't
-            remoteFeed.rfid = stream.id;
-            remoteFeed.rfdisplay = stream.display;
+            subscriberPlugin.rfid = stream.id;
+            subscriberPlugin.rfdisplay = stream.display;
           }
           // We wait for the plugin to send us an offer
           let subscribe = {
@@ -267,18 +281,18 @@
             private_id: mypvtid.value,
             pin: "123123"
           };
-          remoteFeed.send({ message: subscribe });
+          subscriberPlugin.send({ message: subscribe });
         },
         error: function(error) {
           log("subscriber  -- Error attaching plugin...", error)
           onError("subscriber -- Error attaching plugin...", error)
         },
         iceState: function(state) {
-          Janus.log("subscriber ICE state (feed #" + remoteFeed.rfid + ") changed to " + state);
+          Janus.log("subscriber ICE state (feed #" + subscriberPlugin.rfid + ") changed to " + state);
           status.value = state
         },
         webrtcState: function(on) {
-          log("subscriber Janus says this WebRTC PeerConnection (feed #" + remoteFeed.rfid + ") is " + (on ? "up" : "down") + " now");
+          log("subscriber Janus says this WebRTC PeerConnection (feed #" + subscriberPlugin.rfid + ") is " + (on ? "up" : "down") + " now");
         },
         slowLink: function(uplink, lost, mid) {
           log("subscriber Janus reports problems " + (uplink ? "sending" : "receiving") +
@@ -302,16 +316,16 @@
               let substream = msg["substream"];
               let temporal = msg["temporal"];
               if((substream !== null && substream !== undefined) || (temporal !== null && temporal !== undefined)) {
-                if(!remoteFeed.simulcastStarted) {
-                  remoteFeed.simulcastStarted = true;
+                if(!subscriberPlugin.simulcastStarted) {
+                  subscriberPlugin.simulcastStarted = true;
                 }
               }
               // Or maybe SVC?
               let spatial = msg["spatial_layer"];
               temporal = msg["temporal_layer"];
               if((spatial !== null && spatial !== undefined) || (temporal !== null && temporal !== undefined)) {
-                if(!remoteFeed.svcStarted) {
-                  remoteFeed.svcStarted = true;
+                if(!subscriberPlugin.svcStarted) {
+                  subscriberPlugin.svcStarted = true;
                 }
               }
             } else {
@@ -323,7 +337,7 @@
             log("Handling SDP as well...", jsep);
             let stereo = (jsep.sdp.indexOf("stereo=1") !== -1);
             // Answer and attach
-            remoteFeed.createAnswer(
+            subscriberPlugin.createAnswer(
               {
                 jsep: jsep,
                 // We only specify data channels here, as this way in
@@ -342,7 +356,7 @@
                 success: function(jsep) {
                   log("Got SDP!", jsep);
                   let body = { request: "start", room: roomId.value };
-                  remoteFeed.send({ message: body, jsep: jsep });
+                  subscriberPlugin.send({ message: body, jsep: jsep });
                 },
                 error: function(error) {
                   onError("WebRTC error: ", error);
@@ -353,10 +367,11 @@
         // eslint-disable-next-line no-unused-vars
         onlocaltrack: function(track, on) {
           // The subscriber stream is recvonly, we don't expect anything here
+          log("subscriber onlocaltrack", track, on)
         },
         onremotetrack: function(track, mid, on, metadata) {
           log(
-            "Remote feed #" + remoteFeed.rfid +
+            "Remote feed #" + subscriberPlugin.rfid +
             ", remote track (mid=" + mid + ") " +
             (on ? "added" : "removed") +
             (metadata? " (" + metadata.reason + ") ": "") + ":", track
@@ -389,7 +404,7 @@
   }
 
   function stop() {
-    plugin.value.send({ 
+    publisherPlugin.value.send({
       message: { request: "leave" },
       success: () => {
         // Логіка для обробки успішного відключення від кімнати
@@ -402,6 +417,100 @@
     })
   }
 
+  async function startStreamVideo() {
+    try {
+      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      let mediaConfig = []
+      let stream = localStream.value
+
+      if (stream === null || typeof stream === "undefined") {
+        mediaConfig = [
+            { type: 'audio', capture: false, recv: false, add: false },
+            { type: 'video', capture: false, recv: false, add: false },
+        ]
+      } else {
+        mediaConfig = [
+            { type: 'audio', capture: true, recv: false, add: true },
+            { type: 'video', capture: true, recv: false, add: true },
+        ]
+      }
+
+      log("Media Configuration for Publisher set! ->");
+      log(mediaConfig);
+
+      publisherPlugin.value.createOffer({
+        tracks: mediaConfig,
+        success: (sdpAnswer) => {
+          // SDP Offer answered, publish our stream
+          log("Offer answered! Start publishing...")
+          let publish = {
+            request: "configure",
+            audio: true,
+            video: true,
+            data: true
+          };
+          publisherPlugin.value.send({ message: publish, jsep: sdpAnswer })
+        },
+        error: (error) => {
+          log("createOffer error", error)
+        }
+      })
+    } catch (error) {
+      onError('Error accessing camera:', error)
+    }
+  }
+
+  function stopStreamVideo() {
+    let tracks = localStream.value.getTracks()
+
+    tracks.forEach(track => { track.stop() })
+
+    let mediaConfig = [
+      { type: 'audio', capture: false, recv: false, add: false, remove: true },
+      { type: 'video', capture: false, recv: false, add: false, remove: true },
+    ]
+
+    publisherPlugin.value.createOffer({
+      tracks: mediaConfig,
+      success: (sdpAnswer) => {
+        // SDP Offer answered, publish our stream
+        log("Offer answered! Start publishing...")
+        let publish = {
+          request: "configure",
+          audio: false,
+          video: false,
+          data: true
+        };
+        publisherPlugin.value.send({ message: publish, jsep: sdpAnswer })
+      },
+      error: (error) => {
+        log("createOffer error", error)
+      }
+    })
+
+    isStreaming.value = false
+    localStream.value = null
+  }
+
+  function onLocalStream(track) {
+    log("onLocalStream", track)
+
+    if (track.kind === "audio") {
+      // New audio track: create a stream out of it, and use a hidden <audio> element
+      // let audioStream = new MediaStream([track]);
+      // log("Created remote audio stream:", audioStream);
+      // Janus.attachMediaStream(audio.value, stream);
+      // audio.value.srcObject = audioStream
+    } else {
+      // New video track: create a stream out of it
+      let videoStream = new MediaStream([track]);
+      log("Created local video stream:", videoStream);
+      streamVideos.value[track["id"]] = videoStream
+    }
+
+    isStreaming.value = true
+  }
+
   function onRemoteStream(track) {
     log("onRemoteStream", track)
 
@@ -410,7 +519,7 @@
       let audioStream = new MediaStream([track]);
       log("Created remote audio stream:", audioStream);
       // Janus.attachMediaStream(audio.value, stream);
-      audio.value.srcObject = audioStream
+      audio.value[track["id"]] = audioStream
     } else {
       // New video track: create a stream out of it
       let videoStream = new MediaStream([track]);
@@ -423,12 +532,22 @@
   }
 
   function onCleanup() {
+    try {
+      let tracks = localStream.value.getTracks()
+
+      tracks.forEach(track => { track.stop() })
+    } catch (e) {
+      log(e)
+    }
+
     streamVideos.value = []
     audio.value.srcObject = null
     status.value = "disconnected"
     error.value = null
     isViewing.value = false
     isConnected.value = false
+    isStreaming.value = false
+    localStream.value = null
   }
 
   function onError(message, e='') {
@@ -455,11 +574,12 @@
     <button @click="start" v-if="!isConnected">Connect</button>
     <button @click="stop" v-else>Disconnect</button>
     <button @click="startWithToken" v-if="!isConnected">Connect with token</button>
+    <button @click="startStreamVideo" v-if="isConnected && !isStreaming">Start Streaming</button>
+    <button @click="stopStreamVideo" v-else-if="isConnected">Stop Streaming</button>
     <div v-if="error">{{ error }}</div>
     <div>
-      <!-- <video ref="stream" autoplay playsinline /> -->
       <video v-for="(video, index) in streamVideos" :id="index" :srcObject="video" width="100%" autoplay playsinline />
-      <audio ref="audio" hidden autoplay playsinline />
+      <audio v-for="(item, index) in audio" :id="index" :srcObject="item" hidden autoplay playsinline />
     </div>
   </div>
 </template>
