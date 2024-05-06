@@ -1,8 +1,9 @@
 <script setup>
-  import { ref } from "vue";
-  import { log } from "@/services/utility.js";
-  import adapter from 'webrtc-adapter';
+  import { ref } from "vue"
+  import { log } from "@/services/utility.js"
+  import adapter from 'webrtc-adapter'
   import Janus from 'janus-gateway'
+  import appleLogo from '@/assets/images/appleLogo.png'
 
   // const JANUS_URL = 'http://localhost:8088/janus'
   const JANUS_URL = ['ws://localhost:8188', 'http://localhost:8088/janus']
@@ -13,6 +14,7 @@
   let plugin = ref(null)
   let sharePlugin = ref(null)
   let localStream = ref(null)
+  let localVideo = ref(null)
   let localScreenShare = ref(null)
   let roomId = ref(1234)
   let error = ref(null)
@@ -23,11 +25,18 @@
   let shareTrack = ref(null)
   let myid = ref(null)
   let mypvtid = ref(null)
+  let canvas = ref(null)
   var opaqueId = ref(Janus.randomString(12))
 
   async function startStreaming() {
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      localStream.value = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
+      })
 
       janus.value = new Janus({
         server: JANUS_URL,
@@ -96,7 +105,13 @@
 
   async function startStreamingWithToken() {
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      localStream.value = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
+      })
 
       janus.value = new Janus({
         server: JANUS_URL,
@@ -192,20 +207,81 @@
 
           if (message.videoroom === "joined") {
             // Joined successfully, create SDP Offer with our stream
+            let fps = 30
             log("Joined room! Creating offer...");
+            localVideo.value.srcObject = stream
+            // localVideo.value.muted = "muted"
+            localVideo.value.play()
+            let myText = "Hi there!"
+            let myColor = "white"
+            let myFont = "20pt Calibri"
+            let myX = 15, myY = 460
+            let logoW = 500, logoH = 132
+            let logoS = 0.4
+            let logoX = 640 - logoW * logoS - 15, logoY = 15
+            let newCanvas = canvas.value
+            const context = newCanvas.getContext('2d')
+            const logo = new Image()
+            logo.crossOrigin = "Anonymous"
+            // logo.src = "https://janus.conf.meetecho.com/meetecho-logo.png"
+            logo.src = appleLogo
 
-            let mediaConfig = [];
+            const draw = () => {
+              if (!localVideo.value.paused && !localVideo.value.ended) {
+                context.drawImage(localVideo.value, 0, 0, newCanvas.width, newCanvas.height)
+
+                if (logo.complete && logo.naturalHeight !== 0) {
+                  context.drawImage(logo, 20, 20, 50, 50)
+                  // context.drawImage(logo,
+                  //     0, 0, logoW, logoH,
+                  //     logoX, logoY, logoW * logoS, logoH * logoS)
+                }
+
+                context.fillStyle = 'rgba(0,0,0,0.5)'
+                context.fillRect(0, 420, 640, 480)
+                context.font = myFont
+                context.fillStyle = myColor
+                context.fillText(myText, myX, myY)
+
+                // requestAnimationFrame(draw);
+                setTimeout(draw, 1000 / fps)
+              }
+            }
+
+            logo.onload = draw
+
+            let newStream = newCanvas.captureStream(30)
+
+            log("newStream", newStream)
+            log("newStream.getVideoTracks", newStream.getVideoTracks())
+
+            let mediaConfig = []
+            // let body = { audio: true, video: true }
+            // plugin.value.send({ message: body })
 
             if (stream === null || typeof stream === "undefined") {
               mediaConfig = [
-                  { type: 'audio', capture: false, recv: false, add: false },
-                  { type: 'video', capture: false, recv: false, add: false },
+                {type: 'audio', capture: false, recv: false, add: false},
+                {type: 'video', capture: false, recv: false, add: false},
               ]
             } else {
-              mediaConfig = [
-                  { type: 'audio', capture: true, recv: false, add: true },
-                  { type: 'video', capture: true, recv: false, add: true },
-              ]
+              log("canvasStream.value.getAudioTracks()[0]", newStream.getAudioTracks()[0])
+              log("canvasStream.value.getVideoTracks()[0]", newStream.getVideoTracks()[0] instanceof MediaStreamTrack)
+
+              mediaConfig.push({
+                type: 'audio',
+                capture: true,
+                recv: false,
+                add: true
+              })
+
+              if (newStream.getVideoTracks().length > 0)
+                mediaConfig.push({
+                  type: 'video',
+                  capture: newStream.getVideoTracks()[0],
+                  recv: false,
+                  add: true
+                })
             }
 
             log("Media Configuration for Publisher set! ->");
@@ -222,7 +298,7 @@
                   video: true,
                   data: true
                 };
-                plugin.value.send({ message: publish, jsep: sdpAnswer })
+                plugin.value.send({message: publish, jsep: sdpAnswer})
               },
               error: (error) => {
                 log("createOffer error", error)
@@ -724,6 +800,8 @@
     <button @click="startShare" v-if="isStreaming && localScreenShare == null">Start Share</button>
     <button @click="stopShare" v-if="isStreaming && localScreenShare != null">Stop Share</button>
     <div v-if="error">{{ error }}</div>
+    <canvas ref="canvas" width="640" height="480" style="margin: auto; padding: 0; display: none;" />
+    <video ref="localVideo" autoplay muted playsinline style="display: none;" />
     <div>
       <div v-for="(item, index) in localStreamVideos">
         <video :id="index" :srcObject="item" width="100%" autoplay muted playsinline />

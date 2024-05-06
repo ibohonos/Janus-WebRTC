@@ -419,7 +419,13 @@
 
   async function startStreamVideo() {
     try {
-      localStream.value = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      localStream.value = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        }
+      })
       let mediaConfig = []
       let stream = localStream.value
 
